@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/prefetch"
 )
 
 func check(e error) {
@@ -54,6 +55,7 @@ func TestAddrPrefetch(db ethdb.Database, bc *core.BlockChain, block_num uint64, 
 	former_block := rawdb.ReadBlock(db, former_block_hash, former_block_num)
 	statedb, _ := bc.StateAt(former_block.Root())
 
+	// //Geth 的预取
 	// //如果需要预取则进行相应操作(builder自带函数)
 	// if do_prefetch {
 	// 	fmt.Println(block_num, " do_prefetch")
@@ -71,7 +73,7 @@ func TestAddrPrefetch(db ethdb.Database, bc *core.BlockChain, block_num uint64, 
 	//自己写的Prefetch函数
 	if do_prefetch {
 		fmt.Println(block_num, " do_prefetch")
-		Prefetch(statedb, ReadPrefetchList())
+		Prefetch(statedb, ReadPrefetchList()) //读取需要prefetch的address-key列表
 	} else {
 		fmt.Println(block_num, " without_prefetch")
 	}
@@ -124,6 +126,29 @@ func Prefetch(statedb *state.StateDB, prefetch_map map[common.Address][]common.H
 	}
 }
 
+// 获取某个区块中某个tx的sload log
+func GetTxSloadLog(db ethdb.Database, bc *core.BlockChain, block_num uint64, tx_hash string) {
+	fmt.Println("Block Number", block_num, "Tx Hash", tx_hash)
+	former_block_num := block_num - 1
+	block_hash := rawdb.ReadCanonicalHash(db, block_num)
+	former_block_hash := rawdb.ReadCanonicalHash(db, former_block_num)
+	block := rawdb.ReadBlock(db, block_hash, block_num)
+	former_block := rawdb.ReadBlock(db, former_block_hash, former_block_num)
+	statedb, _ := bc.StateAt(former_block.Root())
+	prefetch.TOUCH_ADDR_CH = make(chan prefetch.TouchLog, 100000)
+	_, _, _, err := bc.Processor().Process(block, statedb, vm.Config{})
+	check(err)
+	for {
+		if len(prefetch.TOUCH_ADDR_CH) == 0 {
+			break
+		}
+		log := <-prefetch.TOUCH_ADDR_CH
+		if strings.ToLower(log.WhichTx.Hex()) == strings.ToLower(tx_hash) {
+			fmt.Println(log.Address, log.Key, log.Value)
+		}
+	}
+}
+
 func main() {
 
 	// // TODO看不太出来那个好些，需要打印一下SLOAD命中情况
@@ -141,8 +166,9 @@ func main() {
 	//Test print log of SLOAD
 	//prefetch.LOG.Init()
 	db, bc := GetBlockChain()
-	TestAddrPrefetch(db, bc, 19774797, false)
+	//TestAddrPrefetch(db, bc, 19731000, false)
 	//prefetch.PrintLogLinear(prefetch.LOG)
+	GetTxSloadLog(db, bc, 19736427, "0x06ce016d1820e0616283a81b814b2bbd3c99d334bae0346a0456c8d0869f650a")
 
 	//ReadPrefetchList()
 }

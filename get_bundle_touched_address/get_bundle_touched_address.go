@@ -17,8 +17,10 @@ import (
 	"github.com/ethereum/go-ethereum/prefetch"
 )
 
-var INPUT_PATH string = "../get_flashbots_historical_bundle/output/"
-var OUTPUT_PATH string = "./output/"
+/*
+Run get_flashbots_historical_bundle.go first
+Read Bundle and Get Touched Address
+*/
 
 func check(e error) {
 	if e != nil {
@@ -142,13 +144,13 @@ func RunBlock(db ethdb.Database, bc *core.BlockChain, block_num uint64, check_bl
 		case done := <-done_ch:
 			is_done = done
 		case touch_log := <-prefetch.TOUCH_ADDR_CH:
-			// if _, ok := check_tx_map[touch_log.WhichTx]; !ok { //该touch address不属于mev tx中的
-			// 	break
-			// }
+			if _, ok := check_tx_map[touch_log.WhichTx]; !ok { //该touch address不属于mev tx中的
+				break
+			}
 			address := touch_log.Address
 			key := touch_log.Key
 			//fmt.Println(address)
-			if _, ok := TouchMap[address]; !ok {
+			if _, ok := TouchMap[address]; !ok { //维护全局变量
 				TouchMap[address] = TouchAddress{InvokeCnt: 0, KeyMap: make(map[common.Hash]int)}
 			}
 			obj := TouchMap[address]
@@ -157,7 +159,7 @@ func RunBlock(db ethdb.Database, bc *core.BlockChain, block_num uint64, check_bl
 				obj.KeyMap[key] = 0
 			}
 			obj.KeyMap[key] += 1
-			TouchMap[address] = obj
+			TouchMap[address] = obj //维护全局变量
 			//time.Sleep(time.Second)
 		default:
 			if is_done && len(prefetch.TOUCH_ADDR_CH) == 0 {
@@ -168,10 +170,16 @@ func RunBlock(db ethdb.Database, bc *core.BlockChain, block_num uint64, check_bl
 	}
 }
 
+var INPUT_PATH string = "../get_flashbots_historical_bundle/output/"
+
+// var OUTPUT_PATH string = "./output/"
+// var INPUT_PATH string = "../get_bundle_of_different_mev/output/"
+var OUTPUT_PATH string = "./"
+
 func main() {
 	check_block_map, check_tx_map := ReadBundle(INPUT_PATH + os.Args[1])
-	fmt.Println("check_block_map length:", len(check_block_map))
-	fmt.Println("check_tx_map length:", len(check_tx_map))
+	fmt.Println("MEV_block_map length:", len(check_block_map))
+	fmt.Println("MEV_tx_map length:", len(check_tx_map))
 
 	db, bc := GetBlockChain()
 	//TODO这里加一个循环

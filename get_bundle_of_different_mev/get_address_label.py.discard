@@ -1,0 +1,61 @@
+import json
+
+
+if __name__ == "__main__" :
+    import requests
+
+    # 发送 POST 请求
+    url = 'https://etherscan.io/labelcloud'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0',
+        'Cookie': 'ASP.NET_SessionId=s3yhupzjayahaunjt1ao1jcy; etherscan_offset_datetime=+8; __stripe_mid=3921fc68-2cc2-4f5b-82a1-aac8a175379516cb8e; etherscan_cookieconsent=True; etherscan_pwd=4792:Qdxb:K93MsprF93WofX7TXRCTjsByvBcVkGGg0LWV805jz18=; etherscan_userid=BrianYu; etherscan_autologin=True; etherscan_switch_token_amount_value=value; displaymode=light; _gid=GA1.2.1165196899.1723450243; __cflb=02DiuFnsSsHWYH8WqVXcJWaecAw5gpnmecHTUzTzXAg8C; cf_clearance=RQPgyU219UsFqU_ZpZ2dhiBZ3VgvLjExKa9fWl3hsr8-1723704802-1.0.1.1-Sqrc7bNvGDk1omNso1UescyDcBlnBmp4Cq4xKxbSyv7sIkB8kQqwfLFPy6DoSdbCdGwrP.jZQ_gUA3dftwb33Q; __stripe_sid=490b1a4d-936a-4654-aba2-1fcf7e730ce8f9af24; _ga_T1JC9RNQXV=GS1.1.1723704756.44.1.1723706877.55.0.0; _ga=GA1.2.1885110378.1714113072'
+    }
+    response = requests.get(url, headers=headers)
+
+    # 处理响应结果
+    if response.status_code == 200:
+
+        # data = response.text.split('type: \'wordcloud\',')[1].split('name: \'Occurrences\'')[0].replace('\'', '"').split('<a href="')
+        # label_list = [s.split('">')[0] for s in data[1:]] #获取Acount 或 Token的详细信息地址
+        # print(label_list[1])
+
+        data = response.text.split('type: \'wordcloud\',')[1].split('name: \'Occurrences\'')[0].replace('\'', '"').split('data: ')[1].replace('],', ']').replace('"/', '\'/').replace('">', '\'>')\
+            .replace('name', '"name"').replace('w1', '"w1"').replace('w2', '"w2"').replace('w3', '"w3"').replace('w4', '"w4"').replace('total', '"total"').replace('weight', '"weight"')\
+            .replace('links', '"links"')
+        label_list = json.loads(data) #转json
+
+        label_clean_list = []
+
+        #对list中数据进行预处理
+        for label in label_list:  #w1表示block数  w2表示transaction数 w3表示Account数 w4表示token数
+            label['w1'] = int(label['w1'])
+            if label['w1'] + label['w2'] == label['total']: #我们只要w3和w4
+                #label_list.remove(label)
+                pass
+            else:
+                label['AccountCnt'] = label['w3']
+                label['TokenCnt'] = label['w4']
+                del label['w1']
+                del label['w2']
+                del label['w3']
+                del label['w4']
+
+                #我们只保留Account和Token信息的地址
+                print(label['links'])
+                link_list = label['links'].split('<a href=\'')
+                label['links'] = [s.split('\'>')[0] for s in link_list[1:] if s.find('txs') == -1 and s.find('blocks') == -1 ]
+                label_clean_list.append(label)
+        
+        #print("Label we need count:", len(label_list))
+        #print(label_list)
+
+        with open("label_info_list.json", "w") as f:
+            json.dump(label_clean_list, f, indent=4)    
+
+            
+
+
+    else:
+        print(f'Request failed with status code: {response.status_code}')
+
+        

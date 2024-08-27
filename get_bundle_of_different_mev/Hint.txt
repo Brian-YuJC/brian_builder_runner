@@ -1,0 +1,116 @@
+本文件夹是为了实现一个全新的方案，改方案基于https://data.zeromev.org/docs 提供的接口
+该接口能够返回不同类型的MEV交易信息
+我们主要关注三种MEV：sandwich，liquidation以及arbitrage
+
+Sandwich：
+  {
+    "block_number": 19731000,
+    "tx_index": 0,
+    "mev_type": "frontrun",
+    "protocol": "uniswap2",
+    "user_loss_usd": 0,
+    "extractor_profit_usd": 0,
+    "user_swap_volume_usd": 0,
+    "user_swap_count": 0,
+    "extractor_swap_volume_usd": 2274.41,
+    "extractor_swap_count": 1,
+    "imbalance": 0,
+    "address_from": "0xae2fc483527b8ef99eb5d9b44875f005ba1fae13",
+    "address_to": "0x6b75d8af000000e20b7a7ddf000ba900b4009a80",
+    "arrival_time_us": "0001-01-01T00:00:00Z"
+  },
+  {
+    "block_number": 19731000,
+    "tx_index": 1,
+    "mev_type": "sandwich",
+    "protocol": "uniswap2",
+    "user_loss_usd": 0,
+    "extractor_profit_usd": 0,
+    "user_swap_volume_usd": 741.68,
+    "user_swap_count": 1,
+    "extractor_swap_volume_usd": 0,
+    "extractor_swap_count": 0,
+    "imbalance": 0,
+    "address_from": "0x63202f9c8c094effc903d916c10aa447bd7ed66f",
+    "address_to": "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad",
+    "arrival_time_us": "0001-01-01T00:00:00Z"
+  },
+  {
+    "block_number": 19731000,
+    "tx_index": 2,
+    "mev_type": "sandwich",
+    "protocol": "uniswap2",
+    "user_loss_usd": 0,
+    "extractor_profit_usd": 0,
+    "user_swap_volume_usd": 1488.65,
+    "user_swap_count": 1,
+    "extractor_swap_volume_usd": 0,
+    "extractor_swap_count": 0,
+    "imbalance": 0,
+    "address_from": "0xd086e168f43ef4ae1b7206bc7561c71afc471985",
+    "address_to": "0x80a64c6d7f12c47b7c66c5b4e20e72bc1fcd5d9e",
+    "arrival_time_us": "0001-01-01T00:00:00Z"
+  },
+  {
+    "block_number": 19731000,
+    "tx_index": 3,
+    "mev_type": "backrun",
+    "protocol": "uniswap2",
+    "user_loss_usd": 0,
+    "extractor_profit_usd": 0,
+    "user_swap_volume_usd": 0,
+    "user_swap_count": 0,
+    "extractor_swap_volume_usd": 1964.15,
+    "extractor_swap_count": 1,
+    "imbalance": 0,
+    "address_from": "0xae2fc483527b8ef99eb5d9b44875f005ba1fae13",
+    "address_to": "0x6b75d8af000000e20b7a7ddf000ba900b4009a80",
+    "arrival_time_us": "0001-01-01T00:00:00Z"
+  },
+
+  Liquidation:
+    {
+    "block_number": 19735192,
+    "tx_index": 200,
+    "mev_type": "liquid",
+    "protocol": "aave",
+    "user_loss_usd": 0,
+    "extractor_profit_usd": 0,
+    "user_swap_volume_usd": 0,
+    "user_swap_count": 0,
+    "extractor_swap_volume_usd": 0,
+    "extractor_swap_count": 0,
+    "imbalance": 0,
+    "address_from": "0x3198d47a4e5a192a73ac06f84454eee4987bd41e",
+    "address_to": "0x000000005bcf85aad6ed1d32db5490deddfc97f9",
+    "arrival_time_us": "0001-01-01T00:00:00Z"
+  },
+
+  Arbitrage:
+    {
+    "block_number": 19735192,
+    "tx_index": 216,
+    "mev_type": "arb",
+    "protocol": "multiple",
+    "user_loss_usd": -4.02,
+    "extractor_profit_usd": 4.02,
+    "user_swap_volume_usd": 0,
+    "user_swap_count": 0,
+    "extractor_swap_volume_usd": 399.51,
+    "extractor_swap_count": 3,
+    "imbalance": 0,
+    "address_from": "0x000000ffa51e8fd8dc15c5b77990234810a640e8",
+    "address_to": "0x5079fc00f00f30000e0c8c083801cfde000008b6",
+    "arrival_time_us": "0001-01-01T00:00:00Z"
+  },
+
+先执行get_data_from_api.go从接口获取原始数据
+因为获取的文件有些信息缺失（tx hash），有些信息没用，所以调用data_clean.go获取我们需要的数据
+接着调用get_different_MEV.go 将不同MEV分类开来（Sandwich 那个没搞好，因为有时候两个backrun会同时出现）
+调用Get_arb_or_liquid_touched_address_label.go给touch的address加上标签（标签来源:https://github.com/dawsbot/eth-labels）
+调用analyse_touched_address.go进行排序等数据分析 (建议调用不含标签的touch结果)
+
+
+Liquidation 的数据已经完成采集 19731000_20350000_clean_liquid_touched.json
+Arbitrage 要跑77217个块才能有完整数据
+Sandwich 要跑378712个块才能有完整数据
