@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net/http"
@@ -22,6 +25,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/miner"
+	"github.com/google/uuid"
 	"github.com/holiman/uint256"
 )
 
@@ -31,6 +36,7 @@ func check(e error) {
 	}
 }
 
+// -------------------用于接受txpool_content返回值的结构体------------------------------
 type TxPoolData struct {
 	Data map[string]map[common.Address]map[int]TransactionArgs
 }
@@ -39,6 +45,16 @@ type ResData struct {
 	Id      int                                                   `json:"id"`
 	Jsonrpc string                                                `json:"jsonrpc"`
 	Result  map[string]map[common.Address]map[int]TransactionArgs `json:"result"`
+}
+
+// ----------------------用于接受tx信息返回值的结构体------------------------------------
+type TxData struct {
+	Data TransactionArgs
+}
+type ReqTxResData struct {
+	Id      int             `json:"id"`
+	Jsonrpc string          `json:"jsonrpc"`
+	Result  TransactionArgs `json:"result"`
 }
 
 var TestBlockChainCacheConfig = &core.CacheConfig{
@@ -73,12 +89,12 @@ func GetBlockChain() (ethdb.Database, *core.BlockChain) {
 		// head_block_hash.SetBytes([]byte("0xae6ddd150fb4278af16832bc91f34a81a2aafefde30fecf8da4cdcbcd8ec331f"))
 		// rawdb.WriteHeadBlockHash(db, head_block_hash)
 		// fmt.Println("Set Head Block Hash!")
-		fmt.Println(rawdb.ReadStateScheme(db))
+		fmt.Println("Blockchain DB Scheme:", rawdb.ReadStateScheme(db))
 	}
 
 	bc, err := core.NewBlockChain(db, TestBlockChainCacheConfig, nil, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
 	check(err)
-	fmt.Println("New Block Chain Success!")
+	fmt.Println("New Blockchain Success!")
 
 	return db, bc
 }
@@ -150,7 +166,7 @@ func GetTxInPool() TxPoolData {
 		log.Fatalf("Error encoding JSON: %v", err)
 	}
 	// 发送 POST 请求
-	response, err := http.Post("https://rpc.ankr.com/eth/7e0d2f6412f9595e078416601c04d718fa9695af283f70759f199a21f80e19f8", "application/json", bytes.NewBuffer(jsonData))
+	response, err := http.Post("", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Fatalf("Error sending POST request: %v", err)
 	}
@@ -201,56 +217,139 @@ func GetTxInPool() TxPoolData {
 // 	check(err)
 // }
 
-// // 根据哈希获取block数据
-// // 目的是为了获取已经打包的tx进行实验
-// func GetTxByHash(tx_hash common.Hash) {
-// 	fmt.Println("Get", tx_hash.Hex(), "Hash")
-// 	// 要发送的请求数据
-// 	requestData := map[string]interface{}{
-// 		"method":  "eth_getTransactionByHash",
-// 		"params":  []string{tx_hash.Hex()},
-// 		"id":      1,
-// 		"jsonrpc": "2.0",
-// 	}
-// 	// 将数据编码为 JSON
-// 	jsonData, err := json.Marshal(requestData)
-// 	if err != nil {
-// 		log.Fatalf("Error encoding JSON: %v", err)
-// 	}
-// 	// 发送 POST 请求
-// 	// http://10.119.187.21:8545
-// 	// https://rpc.ankr.com/eth/7e0d2f6412f9595e078416601c04d718fa9695af283f70759f199a21f80e19f8
-// 	response, err := http.Post("http://10.119.187.21:8545", "application/json", bytes.NewBuffer(jsonData))
-// 	if err != nil {
-// 		log.Fatalf("Error sending POST request: %v", err)
-// 	}
-// 	defer response.Body.Close()
-// 	// 检查响应状态
-// 	if response.StatusCode != http.StatusOK {
-// 		log.Fatalf("Error: received status code %d", response.StatusCode)
-// 	}
-// 	// 处理响应
-// 	var responseBody map[string]interface{}
-// 	if err := json.NewDecoder(response.Body).Decode(&responseBody); err != nil {
-// 		log.Fatalf("Error decoding response: %v", err)
-// 	}
-// 	fmt.Println(responseBody)
+// 根据哈希获取block数据
+// 目的是为了获取已经打包的tx进行实验
+func GetTxByBlockNumberAndIndex(block_num uint64, tx_index uint64) TxData {
+	// 要发送的请求数据
+	requestData := map[string]interface{}{
+		"method":  "eth_getTransactionByBlockNumberAndIndex",
+		"params":  []string{"0xc5043f", "0x0"}, //[]string{string(block_num), string(tx_index)},
+		"id":      1,
+		"jsonrpc": "2.0",
+	}
+	// 将数据编码为 JSON
+	jsonData, err := json.Marshal(requestData)
+	if err != nil {
+		log.Fatalf("Error encoding JSON: %v", err)
+	}
+	// 发送 POST 请求
+	response, err := http.Post("", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Fatalf("Error sending POST request: %v", err)
+	}
+	defer response.Body.Close()
+	// 检查响应状态
+	if response.StatusCode != http.StatusOK {
+		log.Fatalf("Error: received status code %d", response.StatusCode)
+	}
+	// 处理响应
+	var responseBody ReqTxResData
+	if err := json.NewDecoder(response.Body).Decode(&responseBody); err != nil {
+		log.Fatalf("Error decoding response: %v", err)
+	}
+	//fmt.Println(responseBody)
+	return TxData{responseBody.Result} //返回TxPoolData结构体数据
+}
+
+// 方法一通过MEV API添加bundle
+// 尝试添加bundle信息到txpool
+func AddMEVBundleTest(bc *core.BlockChain, txs []*types.Transaction, blockNumber uint64) {
+	//新建txpool
+	blobPool := blobpool.New(blobpool.DefaultConfig, bc)
+	legacyPool := legacypool.New(legacypool.DefaultConfig, bc)
+	//sbundlePool := txpool.NewSBundlePool(params.MainnetChainConfig)
+	tx_pool, err := txpool.New(legacypool.DefaultConfig.PriceLimit, bc, []txpool.SubPool{legacyPool, blobPool})
+	check(err)
+
+	// 尝试添加bundle到txpool
+	// txs -> Array[String], A list of signed transactions to execute in an atomic bundle
+	// blockNumber -> String, a hex encoded block number for which this bundle is valid on
+	var replacementUuid uuid.UUID // (Optional) String, UUID that can be used to cancel/replace this bundle
+	var signingAddress common.Address
+	var minTimestamp uint64             // (Optional) Number, the minimum timestamp for which this bundle is valid, in seconds since the unix epoch
+	var maxTimestamp uint64             // (Optional) Number, the maximum timestamp for which this bundle is valid, in seconds since the unix epoch
+	var revertingTxHashes []common.Hash // (Optional) Array[String], A list of tx hashes that are allowed to revert
+	err = tx_pool.AddMevBundle(txs, new(big.Int).SetUint64(blockNumber), replacementUuid, signingAddress, minTimestamp, maxTimestamp, revertingTxHashes)
+	check(err)
+
+	var blockTimestamp uint64
+	mev_bundle, _ := tx_pool.MevBundles(new(big.Int).SetUint64(blockNumber), blockTimestamp)
+	fmt.Println("MEV bundle in txpool cnt:", len(mev_bundle))
+}
+
+// // 方法二：通过flashbotsextra.IDatabaseService添加bundle
+// // TODO
+// func AddMEVbundleToDB() {
+// 	var ds flashbotsextra.IDatabaseService
+// 	dbDSN := ""
+// 	ds, err := flashbotsextra.NewDatabaseService(dbDSN)
+// 	check(err)
 // }
 
+func ReadBundleDatasetCSV(database_path string, next_block_number uint64) []types.MevBundle {
+	// 打开文件
+	input, err := os.Open(database_path)
+	check(err)
+	defer input.Close()
+
+	reader := csv.NewReader(input)
+
+	// 增加缓冲区大小（可选）
+	reader.FieldsPerRecord = -1 // 允许不定字段数量
+
+	// 读取bundle
+	res := make([]types.MevBundle, 0)
+	for {
+		row, err := reader.Read()
+		if err == io.EOF { //文件读取完成跳出循环
+			break
+		}
+		txs := types.Transactions{}
+		for _, tx_hex := range row[1:] {
+			tx := new(types.Transaction)
+			tx_byte, err := hex.DecodeString(tx_hex[2:]) //将Tx 16进制字符串转字节流
+			check(err)
+			err = tx.UnmarshalBinary([]byte(tx_byte)) //将Tx字节流解码成Transaction对象
+			check(err)
+			txs = append(txs, tx) //加入bundle tx列表
+		}
+		// 新建bundle
+		var blockNumber uint64 = next_block_number //这里将全部bundle设置为当前区块号的下一个区块，一遍模拟执行下一个区块时能取出bundle
+		var replacementUuid uuid.UUID
+		var signingAddress common.Address
+		var minTimestamp uint64
+		var maxTimestamp uint64
+		var revertingTxHashes []common.Hash
+		bundle := types.MevBundle{
+			BlockNumber:       new(big.Int).SetUint64(blockNumber),
+			Uuid:              replacementUuid,
+			SigningAddress:    signingAddress,
+			MinTimestamp:      minTimestamp,
+			MaxTimestamp:      maxTimestamp,
+			RevertingTxHashes: revertingTxHashes,
+			Txs:               txs,
+		}
+		res = append(res, bundle) //加入返回的数据集bundle列表
+		//fmt.Println(bundle.Txs)
+	}
+	return res
+}
+
 func main() {
-	_, bc := GetBlockChain()
+	db, bc := GetBlockChain()
+	//GetTxPool(bc, true)
 
 	//SavePathDBParam(db)
 	//DeletePathDB(db)
 
-	// //获取当前状态stateDB
+	//获取当前状态stateDB
 	// start_block_num := uint64(9900000)
 	// start_block_hash := rawdb.ReadCanonicalHash(db, start_block_num)
 	// start_block := rawdb.ReadBlock(db, start_block_hash, start_block_num)
-	// //_, err := bc.StateAt(start_block.Root())
-	// //header := start_block.Header()
-	// //fmt.Println(start_block.Hash())
-	// //check(err)
+	// state, err := bc.StateAt(start_block.Root())
+	// header := start_block.Header()
+	// // //fmt.Println(start_block.Hash())
+	// check(err)
 	// for _, tx := range start_block.Transactions() {
 	// 	GetTxByHash(tx.Hash())
 	// }
@@ -258,8 +357,46 @@ func main() {
 	// header := bc.CurrentBlock()
 	// fmt.Println("Current Header:", header.Number)
 	// // ⭐️TODO:现在的问题是数据库的current block是第0个块，导致gas limit只有5000，导致当前最新的txpool的交易没法放进池里
-	tx_pool := GetTxPool(bc, false)
 
+	//模拟运行builder打包区块流程
+	//dataset_path := "./dataset/assembled_bundle/19731189_20260000_0_526089.csv"
+	dataset_path := "./dataset/assembled_bundle/9000000_10000000_0_25277.csv"
+	next_block_number := bc.CurrentBlock().Number.Uint64() + 1
+	bundles := ReadBundleDatasetCSV(dataset_path, next_block_number)
+	fmt.Println("Bundle in Dataset:", len(bundles))
+	miner.RunBuilder(db, bc, bundles)
+
+	// var simulatedBundles []types.SimulatedBundle
+	// var a uint256.Int
+	// a.SetFromBig(new(big.Int).SetUint64(3))
+	// var b uint256.Int
+	// b.SetFromBig(new(big.Int).SetUint64(1))
+	// var c uint256.Int
+	// c.SetFromBig(new(big.Int).SetUint64(2))
+	// simulatedBundles = append(simulatedBundles, types.SimulatedBundle{MevGasPrice: &a})
+	// simulatedBundles = append(simulatedBundles, types.SimulatedBundle{MevGasPrice: &b})
+	// simulatedBundles = append(simulatedBundles, types.SimulatedBundle{MevGasPrice: &c})
+	// sort.SliceStable(simulatedBundles, func(i, j int) bool {
+	// 	return simulatedBundles[j].MevGasPrice.Cmp(simulatedBundles[i].MevGasPrice) < 0
+	// })
+	// for _, d := range simulatedBundles {
+	// 	fmt.Println(d.MevGasPrice)
+	// }
+
+	// //测试往txpool里添加bundle
+	// res := GetTxByBlockNumberAndIndex(start_block.NumberU64(), 0)
+	// AddMEVBundleTest(bc, []*types.Transaction{res.Data.toTransaction()}, 900000320)
+	// AddMEVBundleTest(bc, bundles[0].Txs, 900000320)
+
+	// //测试go tx16进制表示解码
+	// //tx的字节流可以通过get_raw_transaction_by_block rpc接口得到
+	// //字节流转化为16进制字符串方便保存
+	// tx_hex := "0x02f905340182053f840131a6c88505c8021c8283045f98943fc91a3afd70395cd496c647d5a6cc9d4b2b7fad80b904c43593564c000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000662a884f00000000000000000000000000000000000000000000000000000000000000040a08060c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000032000000000000000000000000000000000000000000000000000000000000003a00000000000000000000000000000000000000000000000000000000000000160000000000000000000000000fdc58bbd4359c9d9b7ba2bcb3529366cb9cfb9e1000000000000000000000000ffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000000000000000000000000000665212fc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000003fc91a3afd70395cd496c647d5a6cc9d4b2b7fad00000000000000000000000000000000000000000000000000000000662a8d0400000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000041cd76019087592af626b4fe0c6a06e5603ad290a9fec31284988a9755129f81823070f6151508d34fda5f330dbb434cca70cd3482411fde1534ff70ee8409c6c51c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000002ed7df418960d6c9a12590000000000000000000000000000000000000000000000000280183a27a3c9bb00000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002000000000000000000000000fdc58bbd4359c9d9b7ba2bcb3529366cb9cfb9e1000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000000000000000000000000000000000000000000060000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200000000000000000000000037a8f295612602f2774d331e562be9e61b83a327000000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000027e7e910ca92377c001a0ec481aa8702bfa5251fbf3158713fb53de42f8f75b10f18fd27fccab3026d55fa0773d89eff11b537f6a636324065177f17e8da0292ea8a8df86e692f930d68153"
+	// tx_byte, err := hex.DecodeString(tx_hex[2:])
+	// check(err)
+	// tx := new(types.Transaction)
+	// err = tx.UnmarshalBinary(tx_byte)
+	// check(err)
 }
 
 //---------------------------------------------------------以下为Geth中的Internal结构体和函数这里拿出来调用----------------------------------------------------
@@ -406,7 +543,7 @@ func (args *TransactionArgs) toTransaction() *types.Transaction {
 			GasPrice: (*big.Int)(args.GasPrice),
 			Value:    (*big.Int)(args.Value),
 			Data:     args.data(),
-			V:        (*big.Int)(args.V), //Brian Add
+			V:        (*big.Int)(args.V), //Brian Add（这里要初始化一下V R S不然后面检查过不了）
 			R:        (*big.Int)(args.R), //Brian Add
 			S:        (*big.Int)(args.S), //Brian Add
 		}

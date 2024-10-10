@@ -27,19 +27,24 @@ func check(e error) {
 // 读取disk中的数据库并建立区块链
 func GetBlockChain() (ethdb.Database, *core.BlockChain) {
 	datadir := "/home/user/common/docker/volumes/eth-docker_geth-eth1-data/_data/geth/chaindata"
-	// datadir := "/home/user/data/ben/cp1_eth-docker_geth-eth1-data/_data/geth/chaindata"
+	//datadir := "/home/user/data/ben/cp1_eth-docker_geth-eth1-data/_data/geth/chaindata"
 	ancient := datadir + "/ancient"
 	db, err := rawdb.Open(
 		rawdb.OpenOptions{
 			Directory:         datadir,
 			AncientsDirectory: ancient,
 			Ephemeral:         true,
+			ReadOnly:          true, //只读模式，防止被无意修改
 		},
 	)
 	if err != nil {
 		fmt.Println("rawdb.Open err!", err)
 	}
-	bc, _ := core.NewBlockChain(db, core.DefaultCacheConfigWithScheme(rawdb.HashScheme), nil, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
+	fmt.Println("Open Database Success!")
+	fmt.Println(rawdb.ReadStateScheme(db)) //检测数据库scheme
+
+	bc, err := core.NewBlockChain(db, core.DefaultCacheConfigWithScheme(rawdb.HashScheme), nil, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
+	check(err)
 
 	return db, bc
 }
@@ -149,6 +154,38 @@ func GetTxSloadLog(db ethdb.Database, bc *core.BlockChain, block_num uint64, tx_
 	}
 }
 
+//TODO
+// // 获取geth原生Metric, 记录了系统运行的信息如命中次数等
+// func GetMeter(name string) metrics.Meter {
+// 	m := metrics.GetOrRegisterMeter(name, prefetch.MEM_LOG_REGISTER)
+// 	//m := metrics.NewMeter()
+// 	//m.Mark(10)
+// 	fmt.Println("Hit", m.Snapshot().Count())
+// 	return m
+// }
+
+//TODO
+// // 对比从Snapshot获取Account数据和Trie获取的时间差异
+// func TestSnapshotVsTrie(db ethdb.Database, bc *core.BlockChain, block_num uint64) {
+// 	block_hash := rawdb.ReadCanonicalHash(db, block_num)
+// 	block := rawdb.ReadBlock(db, block_hash, block_num)
+// 	state_root := block.Root()
+
+// 	address := common.Address{}
+// 	address_byte, err := hex.DecodeString("31539cf673d44665c7831def5738fe5f37bbb8d6")
+// 	check(err)
+// 	address.SetBytes(address_byte)
+// 	key := common.Hash{}
+// 	key_byte, err := hex.DecodeString("b10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf8")
+// 	check(err)
+// 	key.SetBytes(key_byte)
+// 	keccaker := crypto.NewKeccakState()
+// 	addrHash := crypto.HashData(keccaker, address[:])
+// 	fmt.Println(address)
+// 	fmt.Println(addrHash)
+// 	bc.Snapshots().Snapshot(state_root).Account(addrHash)
+// }
+
 func main() {
 
 	// // TODO看不太出来那个好些，需要打印一下SLOAD命中情况
@@ -165,10 +202,20 @@ func main() {
 
 	//Test print log of SLOAD
 	//prefetch.LOG.Init()
-	db, bc := GetBlockChain()
-	//TestAddrPrefetch(db, bc, 19731000, false)
+	//prefetch.ENABLE_METER = true //开启Metric记录
+	_, _ = GetBlockChain()
+	prefetch.DO_INVOKE_TRACE = true
+	//TestAddrPrefetch(db, bc, 9836427, false)
+	//TestAddrPrefetch(db, bc, 19731001, false)
+	//diff_size, buf_size := bc.Snapshots().Size()
+	//fmt.Println("Snapshot Diff Size:", diff_size, "Buf Size:", buf_size)
+	//TestSnapshotVsTrie(db, bc, 19731001)
+
+	//GetMeter("hashdb/memcache/clean/hit")
 	//prefetch.PrintLogLinear(prefetch.LOG)
-	GetTxSloadLog(db, bc, 19736427, "0x06ce016d1820e0616283a81b814b2bbd3c99d334bae0346a0456c8d0869f650a")
+
+	//prefetch.DO_TOUCH_ADDR_LOG = false
+	//GetTxSloadLog(db, bc, 19736427, "0x06ce016d1820e0616283a81b814b2bbd3c99d334bae0346a0456c8d0869f650a")
 
 	//ReadPrefetchList()
 }
