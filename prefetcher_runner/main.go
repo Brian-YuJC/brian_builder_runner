@@ -11,6 +11,8 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"reflect"
+	"sort"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -18,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
@@ -26,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/miner"
+	"github.com/ethereum/go-ethereum/prefetch"
 	"github.com/google/uuid"
 	"github.com/holiman/uint256"
 )
@@ -286,6 +290,7 @@ func AddMEVBundleTest(bc *core.BlockChain, txs []*types.Transaction, blockNumber
 // 	check(err)
 // }
 
+// 读取MEVbundle的csv文件，然后解码16进制的tx并打包成MEVBundle
 func ReadBundleDatasetCSV(database_path string, next_block_number uint64) []types.MevBundle {
 	// 打开文件
 	input, err := os.Open(database_path)
@@ -335,14 +340,104 @@ func ReadBundleDatasetCSV(database_path string, next_block_number uint64) []type
 	return res
 }
 
+// 通过Transaction获取Nonce
+func TxNonceGetter(tx *types.Transaction) uint64 {
+	type_ := reflect.TypeOf(tx.GetInner()).String()
+	var nonce uint64
+	if type_ == "*types.LegacyTx" {
+		inner := tx.GetInner().(*types.LegacyTx)
+		nonce = inner.Nonce
+	} else if type_ == "*types.DynamicFeeTx" {
+		inner := tx.GetInner().(*types.DynamicFeeTx)
+		nonce = inner.Nonce
+	} else if type_ == "*types.AccessListTx" {
+		inner := tx.GetInner().(*types.AccessListTx)
+		nonce = inner.Nonce
+	} else {
+		panic("unknow type")
+	}
+	return nonce
+}
+
+// 设置tx的nonce为新nonce
+func TxNonceSetter(tx *types.Transaction, nonce uint64) {
+	type_ := reflect.TypeOf(tx.GetInner()).String()
+	if type_ == "*types.LegacyTx" {
+		inner := tx.GetInner().(*types.LegacyTx)
+		inner.Nonce = nonce
+	} else if type_ == "*types.DynamicFeeTx" {
+		inner := tx.GetInner().(*types.DynamicFeeTx)
+		inner.Nonce = nonce
+	} else if type_ == "*types.AccessListTx" {
+		inner := tx.GetInner().(*types.AccessListTx)
+		inner.Nonce = nonce
+	} else {
+		panic("unknow type")
+	}
+}
+
+// 基于某个状态重构bundle中tx的Nonce
+// 如果同一个发送者有多条tx在MEVbundle pool，Nonce全部一样都是重构为当前状态下发送者的下一个Nonce
+func ReconstructNonce(bc *core.BlockChain, bundles []types.MevBundle, state *state.StateDB, header *types.Header) {
+	config := bc.GetChainConfig()
+	account_map := make(map[common.Address]uint64)
+	for _, bundle := range bundles {
+		for _, tx := range bundle.Txs {
+			sender, err := types.Sender(types.MakeSigner(config, header.Number, header.Time), tx)
+			check(err)
+			if _, ok := account_map[sender]; !ok {
+				account_map[sender] = state.GetNonce(sender)
+			}
+			TxNonceSetter(tx, account_map[sender]) //设置新Nonce
+		}
+	}
+}
+
+// 基于某个状态重构bundle中tx的Nonce
+func ReconstructNonceEnhence(bc *core.BlockChain, bundles []types.MevBundle, state *state.StateDB, header *types.Header) {
+	config := bc.GetChainConfig()
+	//维护sender和其所有的tx
+	account_map := make(map[common.Address][]*types.Transaction)
+	for _, bundle := range bundles {
+		for _, tx := range bundle.Txs {
+			sender, err := types.Sender(types.MakeSigner(config, header.Number, header.Time), tx)
+			check(err)
+			if _, ok := account_map[sender]; !ok { //该sender第一次出现
+				account_map[sender] = make([]*types.Transaction, 0) //创建sender为当前send的tx指针列表
+			}
+			account_map[sender] = append(account_map[sender], tx) //维护map
+		}
+	}
+	//按顺序重构同一个sender的所有tx nonce
+	for sender, tx_list := range account_map {
+		// 同一个sender发送的tx，按原来的nonce从小到大排序
+		// 因为重构的时候会从小到大分配新nonce
+		sort.Slice(tx_list, func(i, j int) bool {
+			var nonce_i uint64 = TxNonceGetter(tx_list[i])
+			var nonce_j uint64 = TxNonceGetter(tx_list[j])
+			return nonce_i < nonce_j
+		})
+		//同一个sender，多个tx，按原来nonce排序重构为新nonce
+		nonce := state.GetNonce(sender) //当前状态下sender的nonce
+		for _, tx := range tx_list {
+			TxNonceSetter(tx, nonce) // 重构每个tx的nonce
+			nonce += 1               //下个tx nonce+1
+		}
+	}
+}
+
 func main() {
+	// 功能：建立Blockchain
 	db, bc := GetBlockChain()
+
+	// 功能：调用接口获取最新的pending tx
 	//GetTxPool(bc, true)
 
+	// 功能：数据库Path模式转换为Hash模式
 	//SavePathDBParam(db)
 	//DeletePathDB(db)
 
-	//获取当前状态stateDB
+	// 测试：获取当前状态stateDB
 	// start_block_num := uint64(9900000)
 	// start_block_hash := rawdb.ReadCanonicalHash(db, start_block_num)
 	// start_block := rawdb.ReadBlock(db, start_block_hash, start_block_num)
@@ -353,19 +448,33 @@ func main() {
 	// for _, tx := range start_block.Transactions() {
 	// 	GetTxByHash(tx.Hash())
 	// }
-
 	// header := bc.CurrentBlock()
 	// fmt.Println("Current Header:", header.Number)
 	// // ⭐️TODO:现在的问题是数据库的current block是第0个块，导致gas limit只有5000，导致当前最新的txpool的交易没法放进池里
 
-	//模拟运行builder打包区块流程
+	// 功能：log and metric
+	prefetch.LOG.Init()
+
+	// 功能：模拟运行builder打包区块流程
 	//dataset_path := "./dataset/assembled_bundle/19731189_20260000_0_526089.csv"
 	dataset_path := "./dataset/assembled_bundle/9000000_10000000_0_25277.csv"
 	next_block_number := bc.CurrentBlock().Number.Uint64() + 1
 	bundles := ReadBundleDatasetCSV(dataset_path, next_block_number)
+	state, err := bc.State()
+	header := bc.CurrentHeader()
+	check(err)
+	ReconstructNonce(bc, bundles, state, header)
+	//ReconstructNonceEnhence(bc, bundles, state, header)
 	fmt.Println("Bundle in Dataset:", len(bundles))
+	//运行builder
 	miner.RunBuilder(db, bc, bundles)
 
+	//功能：log and metric
+	prefetch.PrintLogLinear(prefetch.LOG)
+	//prefetch.DO_TOUCH_ADDR_LOG = false
+	//GetTxSloadLog(db, bc, 19736427, "0x06ce016d1820e0616283a81b814b2bbd3c99d334bae0346a0456c8d0869f650a")
+
+	// 测试：源码的按MevGasPrice排序测试
 	// var simulatedBundles []types.SimulatedBundle
 	// var a uint256.Int
 	// a.SetFromBig(new(big.Int).SetUint64(3))
@@ -383,12 +492,12 @@ func main() {
 	// 	fmt.Println(d.MevGasPrice)
 	// }
 
-	// //测试往txpool里添加bundle
+	// 测试：往txpool里添加bundle
 	// res := GetTxByBlockNumberAndIndex(start_block.NumberU64(), 0)
 	// AddMEVBundleTest(bc, []*types.Transaction{res.Data.toTransaction()}, 900000320)
 	// AddMEVBundleTest(bc, bundles[0].Txs, 900000320)
 
-	// //测试go tx16进制表示解码
+	// 测试：go tx16进制表示解码
 	// //tx的字节流可以通过get_raw_transaction_by_block rpc接口得到
 	// //字节流转化为16进制字符串方便保存
 	// tx_hex := "0x02f905340182053f840131a6c88505c8021c8283045f98943fc91a3afd70395cd496c647d5a6cc9d4b2b7fad80b904c43593564c000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000662a884f00000000000000000000000000000000000000000000000000000000000000040a08060c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000032000000000000000000000000000000000000000000000000000000000000003a00000000000000000000000000000000000000000000000000000000000000160000000000000000000000000fdc58bbd4359c9d9b7ba2bcb3529366cb9cfb9e1000000000000000000000000ffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000000000000000000000000000665212fc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000003fc91a3afd70395cd496c647d5a6cc9d4b2b7fad00000000000000000000000000000000000000000000000000000000662a8d0400000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000041cd76019087592af626b4fe0c6a06e5603ad290a9fec31284988a9755129f81823070f6151508d34fda5f330dbb434cca70cd3482411fde1534ff70ee8409c6c51c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000002ed7df418960d6c9a12590000000000000000000000000000000000000000000000000280183a27a3c9bb00000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002000000000000000000000000fdc58bbd4359c9d9b7ba2bcb3529366cb9cfb9e1000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000000000000000000000000000000000000000000060000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200000000000000000000000037a8f295612602f2774d331e562be9e61b83a327000000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000027e7e910ca92377c001a0ec481aa8702bfa5251fbf3158713fb53de42f8f75b10f18fd27fccab3026d55fa0773d89eff11b537f6a636324065177f17e8da0292ea8a8df86e692f930d68153"
