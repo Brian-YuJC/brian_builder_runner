@@ -24,6 +24,16 @@ func check(e error) {
 	}
 }
 
+var TestCacheConfig = &core.CacheConfig{
+	TrieCleanLimit:  256,
+	TrieDirtyLimit:  256,
+	TrieTimeLimit:   5 * time.Minute,
+	SnapshotLimit:   256,
+	SnapshotWait:    true,
+	StateScheme:     rawdb.HashScheme,
+	SnapshotNoBuild: true,
+}
+
 // 读取disk中的数据库并建立区块链
 func GetBlockChain() (ethdb.Database, *core.BlockChain) {
 	datadir := "/home/user/common/docker/volumes/eth-docker_geth-eth1-data/_data/geth/chaindata"
@@ -43,7 +53,7 @@ func GetBlockChain() (ethdb.Database, *core.BlockChain) {
 	fmt.Println("Open Database Success!")
 	fmt.Println(rawdb.ReadStateScheme(db)) //检测数据库scheme
 
-	bc, err := core.NewBlockChain(db, core.DefaultCacheConfigWithScheme(rawdb.HashScheme), nil, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
+	bc, err := core.NewBlockChain(db, TestCacheConfig, nil, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
 	check(err)
 
 	return db, bc
@@ -200,11 +210,23 @@ func main() {
 	// 	db.Close()
 	// }
 
+	// //测试检测triedb大小
+	// db, bc := GetBlockChain()
+	// go func() {
+	// 	for true {
+	// 		a, b, c := bc.TrieDB().Size()
+	// 		fmt.Println(a, b, c)
+	// 		time.Sleep(1 * time.Second)
+	// 	}
+	// }()
+	// TestAddrPrefetch(db, bc, 19795703, true)
+	// time.Sleep(10 * time.Second)
+
 	//Test print log of SLOAD
 	//prefetch.LOG.Init()
 	//prefetch.ENABLE_METER = true //开启Metric记录
-	_, _ = GetBlockChain()
-	prefetch.DO_INVOKE_TRACE = true
+	//_, _ = GetBlockChain()
+	//prefetch.DO_INVOKE_TRACE = true
 	//TestAddrPrefetch(db, bc, 9836427, false)
 	//TestAddrPrefetch(db, bc, 19731001, false)
 	//diff_size, buf_size := bc.Snapshots().Size()

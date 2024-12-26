@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"runtime"
 	"sort"
 	"time"
 
@@ -29,7 +30,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/miner"
-	"github.com/ethereum/go-ethereum/prefetch"
 	"github.com/google/uuid"
 	"github.com/holiman/uint256"
 )
@@ -40,7 +40,7 @@ func check(e error) {
 	}
 }
 
-// -------------------用于接受txpool_content返回值的结构体------------------------------
+// -------------------用于接受接口txpool_content返回值的结构体------------------------------
 type TxPoolData struct {
 	Data map[string]map[common.Address]map[int]TransactionArgs
 }
@@ -51,7 +51,7 @@ type ResData struct {
 	Result  map[string]map[common.Address]map[int]TransactionArgs `json:"result"`
 }
 
-// ----------------------用于接受tx信息返回值的结构体------------------------------------
+// ----------------------用于接受接口tx信息返回值的结构体------------------------------------
 type TxData struct {
 	Data TransactionArgs
 }
@@ -62,19 +62,21 @@ type ReqTxResData struct {
 }
 
 var TestBlockChainCacheConfig = &core.CacheConfig{
-	TrieCleanLimit:  256,
-	TrieDirtyLimit:  256,
-	TrieTimeLimit:   5 * time.Minute,
-	SnapshotLimit:   256,
-	SnapshotWait:    true,
-	StateScheme:     rawdb.HashScheme,
-	SnapshotNoBuild: true,
+	TrieCleanLimit:      256,
+	TrieCleanNoPrefetch: true,
+	TrieDirtyLimit:      256,
+	TrieTimeLimit:       5 * time.Minute,
+	SnapshotLimit:       256,
+	SnapshotWait:        false,
+	StateScheme:         rawdb.HashScheme,
+	SnapshotNoBuild:     true, //snapconfig：NoBuild
+	//TrieDirtyDisabled: true,
 }
 
 // 读取disk中的数据库并建立区块链
 func GetBlockChain() (ethdb.Database, *core.BlockChain) {
-	//datadir := "/home/user/common/docker/volumes/eth-docker_geth-eth1-data/_data/geth/chaindata"
-	datadir := "/home/user/common/docker/volumes/cp1_eth-docker_geth-eth1-data/_data/geth/chaindata"
+	datadir := "/home/user/common/docker/volumes/eth-docker_geth-eth1-data/_data/geth/chaindata"
+	//datadir := "/home/user/common/docker/volumes/cp1_eth-docker_geth-eth1-data/_data/geth/chaindata"
 	ancient := datadir + "/ancient"
 	db, err := rawdb.Open(
 		rawdb.OpenOptions{
@@ -88,11 +90,6 @@ func GetBlockChain() (ethdb.Database, *core.BlockChain) {
 		fmt.Println("rawdb.Open err!", err)
 	} else {
 		fmt.Println("Open Database Success!")
-		// head_block_hash := common.Hash{}
-		//default: 0x0000000000000000000000000000000000000000000000000000000000000000
-		// head_block_hash.SetBytes([]byte("0xae6ddd150fb4278af16832bc91f34a81a2aafefde30fecf8da4cdcbcd8ec331f"))
-		// rawdb.WriteHeadBlockHash(db, head_block_hash)
-		// fmt.Println("Set Head Block Hash!")
 		fmt.Println("Blockchain DB Scheme:", rawdb.ReadStateScheme(db))
 	}
 
@@ -186,40 +183,6 @@ func GetTxInPool() TxPoolData {
 	}
 	return TxPoolData{Data: responseBody.Result} //返回TxPoolData结构体数据
 }
-
-// // ！！！！！非常危险的操作！！！！！
-// 用于rawdb在检测数据库类型时rawdb.ReadStateScheme(db)将原本的path检测为hash
-// 该函数主要检测两个key的位置一个是key为“A”的位置表示AccountTrie的根，和“LastStateID”表示当前状态id
-// func DeletePathDB(db ethdb.Database) {
-//  //强制删除AccountTrie的根的数据
-// 	SavePathDBParam(db)
-// 	db.Delete([]byte("A"))
-// 	//强制重置stateID为0
-// 	var id uint64 = 0
-// 	buf := make([]byte, 8)
-// 	binary.BigEndian.PutUint64(buf, id)
-// 	db.Put([]byte("LastStateID"), buf)
-// 	db.Close()
-// }
-
-// // 保存PathDB重要的数据
-// 用于DeletePathDB时先保存数据
-// func SavePathDBParam(db ethdb.Database) {
-// 	path := "./pathdb.log"
-// 	output, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-// 	check(err)
-// 	defer output.Close()
-// 	state_id_byte, err := db.Get([]byte("LastStateID"))
-// 	check(err)
-// 	state_id := hex.EncodeToString(state_id_byte)
-// 	account_trie_root_byte, err := db.Get(append([]byte("A"), nil...))
-// 	account_trie_root := hex.EncodeToString(account_trie_root_byte)
-// 	check(err)
-// 	_, err = output.WriteString("LastStateID " + state_id)
-// 	check(err)
-// 	_, err = output.WriteString("AccountTrieRoot " + account_trie_root)
-// 	check(err)
-// }
 
 // 根据哈希获取block数据
 // 目的是为了获取已经打包的tx进行实验
@@ -335,10 +298,36 @@ func ReadBundleDatasetCSV(database_path string, next_block_number uint64) []type
 			Txs:               txs,
 		}
 		res = append(res, bundle) //加入返回的数据集bundle列表
-		//fmt.Println(bundle.Txs)
+		//fmt.Println(len(bundle.Txs))
 	}
 	return res
 }
+
+// // 将对象导出为二进制文件(好像解码二进制文件比较慢，这里弃用)
+// func WriteBundleDatasetBin(output_path string, bundles []types.MevBundle) {
+// 	// 导出对象到二进制文件
+// 	file, err := os.Create(output_path)
+// 	check(err)
+// 	defer file.Close()
+// 	//编码对象
+// 	encoder := gob.NewEncoder(file)
+// 	err = encoder.Encode(bundles)
+// 	check(err)
+// }
+
+// // 读取转化为二进制的对象文件(好像解码二进制文件比较慢，这里弃用)
+// func ReadBundleDatasetBin(database_path string) []types.MevBundle {
+// 	//打开二进制文件
+// 	file, err := os.Open(database_path)
+// 	check(err)
+// 	defer file.Close()
+// 	//解码二进制文件到对象
+// 	var bundles []types.MevBundle
+// 	decoder := gob.NewDecoder(file)
+// 	err = decoder.Decode(&bundles)
+// 	check(err)
+// 	return bundles
+// }
 
 // 通过Transaction获取Nonce
 func TxNonceGetter(tx *types.Transaction) uint64 {
@@ -379,7 +368,7 @@ func TxNonceSetter(tx *types.Transaction, nonce uint64) {
 // 基于某个状态重构bundle中tx的Nonce
 // 如果同一个发送者有多条tx在MEVbundle pool，Nonce全部一样都是重构为当前状态下发送者的下一个Nonce
 func ReconstructNonce(bc *core.BlockChain, bundles []types.MevBundle, state *state.StateDB, header *types.Header) {
-	config := bc.GetChainConfig()
+	config := bc.Config()
 	account_map := make(map[common.Address]uint64)
 	for _, bundle := range bundles {
 		for _, tx := range bundle.Txs {
@@ -394,8 +383,8 @@ func ReconstructNonce(bc *core.BlockChain, bundles []types.MevBundle, state *sta
 }
 
 // 基于某个状态重构bundle中tx的Nonce
-func ReconstructNonceEnhence(bc *core.BlockChain, bundles []types.MevBundle, state *state.StateDB, header *types.Header) {
-	config := bc.GetChainConfig()
+func ReconstructNonceEnhance(bc *core.BlockChain, bundles []types.MevBundle, state *state.StateDB, header *types.Header) {
+	config := bc.Config()
 	//维护sender和其所有的tx
 	account_map := make(map[common.Address][]*types.Transaction)
 	for _, bundle := range bundles {
@@ -426,9 +415,72 @@ func ReconstructNonceEnhence(bc *core.BlockChain, bundles []types.MevBundle, sta
 	}
 }
 
+// dataset_path := "./dataset/assembled_bundle/20300000_20310000_0_9978.csv"
+func ReadBundleDataset(bc *core.BlockChain, dataset_path string, dataset_type string, reconstruct_method string) []types.MevBundle {
+	var bundles []types.MevBundle
+
+	//读取数据集
+	next_block_number := bc.CurrentBlock().Number.Uint64() + 1
+	state, err := bc.State()     //获取区块链最新状态
+	header := bc.CurrentHeader() //获取当前区块头
+	check(err)
+	if dataset_type == "csv" { //csv文件
+		bundles = ReadBundleDatasetCSV(dataset_path, next_block_number) //读取bundle csv数据
+	} else {
+		fmt.Println("Err Dataset Type!")
+	}
+	// 弃用二进制读取模式
+	// else if dataset_type == "bin" { //二进制对象
+	// 	bundles = ReadBundleDatasetBin(dataset_path)
+	// }
+
+	//选择重构方案用于数据集状态范围和当前状态相差很多的情况（不然不改的话都是非法交易）
+	if reconstruct_method == "enhance" {
+		ReconstructNonceEnhance(bc, bundles, state, header) //跟据当前状态重构bundle的nonce（因为数据集的bundle不一定是当前状态下的）
+	} else if reconstruct_method == "normal" {
+		ReconstructNonce(bc, bundles, state, header) //跟据当前状态重构bundle的nonce（因为数据集的bundle不一定是当前状态下的）
+	} else if reconstruct_method == "" { //不进行任何的nonce重构
+
+	} else {
+		fmt.Println("Err Reconstruct Method!")
+	}
+
+	//fmt.Println("Bundle in Dataset:", len(bundles))
+	return bundles
+}
+
+// 进行简单测试要用
+func RunSingleBlock(db ethdb.Database, bc *core.BlockChain, block_num uint64) {
+	former_block_num := block_num - 1
+	block_hash := rawdb.ReadCanonicalHash(db, block_num)
+	former_block_hash := rawdb.ReadCanonicalHash(db, former_block_num)
+	block := rawdb.ReadBlock(db, block_hash, block_num)
+	former_block := rawdb.ReadBlock(db, former_block_hash, former_block_num)
+	statedb, _ := bc.StateAt(former_block.Root())
+	_, _, _, err := bc.Processor().Process(block, statedb, vm.Config{})
+	check(err)
+}
+
 func main() {
 	// 功能：建立Blockchain
 	db, bc := GetBlockChain()
+	// // triedb 层的prefetch
+	// prefetch_list := prefetch.ReadPrefetchList()            // Brian Add
+	// fmt.Println("Prefetch_List Size:", len(prefetch_list))  // Brian Add
+	// prefetch.TrieDB_Prefetch(bc.GetTrieDB(), prefetch_list) // Brian Add: 🥸
+	// fmt.Println("Prefetch Finish!")                         // Brian Add
+	// // triedb->hashdb cleans Monitor
+	// monitor := metric.NewMemoryMonitor()                                          //创建一个内存检测器
+	// monitor.MemoryRegister("HashDB", bc.TrieDB().GetBackend().(*hashdb.Database)) //添加hashdb作为监测对象
+	// monitor.Start(int64(1e9))                                                     //开始监测一秒返回一条数据
+	// //循环调用检测器获取最新数据
+	// go func() {
+	// 	time.Sleep(1 * time.Second)
+	// 	for true {
+	// 		fmt.Println(monitor.GetLastRecord("HashDB", "hashdb.cleansSize"))
+	// 		time.Sleep(1 * time.Second)
+	// 	}
+	// }()
 
 	// 功能：调用接口获取最新的pending tx
 	//GetTxPool(bc, true)
@@ -450,29 +502,38 @@ func main() {
 	// }
 	// header := bc.CurrentBlock()
 	// fmt.Println("Current Header:", header.Number)
-	// // ⭐️TODO:现在的问题是数据库的current block是第0个块，导致gas limit只有5000，导致当前最新的txpool的交易没法放进池里
-
-	// 功能：log and metric
-	prefetch.LOG.Init()
+	// // ⭐️TODO:现在的问题是数据库的current block是第0个块，导致gas limit只有5000，导致当前最新的txpool的交易没法放进池里（解决了，现在强行设置数据库current blocks为20306538）
 
 	// 功能：模拟运行builder打包区块流程
-	//dataset_path := "./dataset/assembled_bundle/19731189_20260000_0_526089.csv"
-	dataset_path := "./dataset/assembled_bundle/9000000_10000000_0_25277.csv"
-	next_block_number := bc.CurrentBlock().Number.Uint64() + 1
-	bundles := ReadBundleDatasetCSV(dataset_path, next_block_number)
-	state, err := bc.State()
-	header := bc.CurrentHeader()
-	check(err)
-	ReconstructNonce(bc, bundles, state, header)
-	//ReconstructNonceEnhence(bc, bundles, state, header)
+	// //dataset_path := "./dataset/assembled_bundle/19731189_20260000_0_526089.csv"
+	// dataset_path := "./dataset/assembled_bundle/20300000_20310000_0_9978.csv"
+	// next_block_number := bc.CurrentBlock().Number.Uint64() + 1
+	// bundles := ReadBundleDatasetCSV(dataset_path, next_block_number) //读取bundle csv数据
+	// state, err := bc.State()                                         //获取区块链最新状态
+	// header := bc.CurrentHeader()                                     //获取当前区块头
+	// check(err)
+	// //ReconstructNonce(bc, bundles, state, header) //跟据当前状态重构bundle的nonce（因为数据集的bundle不一定是当前状态下的）
+	// ReconstructNonceEnhence(bc, bundles, state, header) //跟据当前状态重构bundle的nonce（因为数据集的bundle不一定是当前状态下的）
+	bundles := ReadBundleDataset(bc, "./dataset/assembled_bundle/20300000_20310000_0_9978.csv", "csv", "")
 	fmt.Println("Bundle in Dataset:", len(bundles))
-	//运行builder
-	miner.RunBuilder(db, bc, bundles)
-
-	//功能：log and metric
-	prefetch.PrintLogLinear(prefetch.LOG)
-	//prefetch.DO_TOUCH_ADDR_LOG = false
-	//GetTxSloadLog(db, bc, 19736427, "0x06ce016d1820e0616283a81b814b2bbd3c99d334bae0346a0456c8d0869f650a")
+	//	循环运行builder
+	run_cnt := 1
+	for run_cnt > 0 { //这里写了死循环重复进行generate操作
+		//metric.GLOBAL_HIT_MONITOR.Start()
+		_ = miner.RunWorker(db, bc, bundles) //模拟运行
+		// 当前内存使用情况
+		var memStats runtime.MemStats
+		runtime.ReadMemStats(&memStats)
+		fmt.Printf("分配的内存: %v bytes\n", memStats.Alloc)
+		// 强制垃圾回收
+		runtime.GC()
+		// 再次检查内存使用情况
+		runtime.ReadMemStats(&memStats)
+		fmt.Printf("强制 GC 后的内存: %v bytes\n", memStats.Alloc)
+		// metric.GLOBAL_HIT_MONITOR.Stop()
+		// metric.GLOBAL_HIT_MONITOR.OutputRecord()
+		run_cnt--
+	}
 
 	// 测试：源码的按MevGasPrice排序测试
 	// var simulatedBundles []types.SimulatedBundle
